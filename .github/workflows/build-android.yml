@@ -1,0 +1,68 @@
+name: Build signed Android app bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      versionCode:
+        description: "Android versionCode (must be higher than your last upload in Play Console)"
+        required: true
+        default: "2"
+      versionName:
+        description: "Version name shown to users, e.g. 1.1.0"
+        required: true
+        default: "1.1.0"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Install JS dependencies
+        run: npm install
+
+      - name: Add Android platform (Capacitor)
+        run: npx cap add android
+
+      - name: Copy web assets into the native project
+        run: npx cap copy android
+
+      - name: Decode keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+
+      - name: Patch build.gradle with signing config + version
+        run: python3 scripts/patch_gradle.py "${{ github.event.inputs.versionCode }}" "${{ github.event.inputs.versionName }}"
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build signed release AAB
+        working-directory: android
+        env:
+          RELEASE_STORE_FILE: release.keystore
+          RELEASE_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew bundleRelease
+
+      - name: Upload signed AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: sira-quran-academy-release
+          path: android/app/build/outputs/bundle/release/app-release.aab
+
+      - name: Clean up keystore file
+        if: always()
+        run: rm -f android/app/release.keystore
